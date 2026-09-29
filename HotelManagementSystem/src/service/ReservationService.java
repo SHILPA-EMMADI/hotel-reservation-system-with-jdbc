@@ -1,0 +1,19 @@
+package service;
+
+import config.DBConnection;
+import dao.*;
+import model.*;
+import java.sql.*;
+import java.time.LocalDate;
+import java.util.List;
+
+public class ReservationService {
+    private final RoomDAO roomDAO=new RoomDAO(); private final GuestDAO guestDAO=new GuestDAO(); private final ReservationDAO reservationDAO=new ReservationDAO();
+    public boolean addRoom(Room r)throws SQLException{return roomDAO.addRoom(r);} public List<Room> getAllRooms()throws SQLException{return roomDAO.getAllRooms();}
+    public List<Room> getAvailableRooms(LocalDate in,LocalDate out)throws SQLException{validateDates(in,out);return roomDAO.findAvailableRooms(in,out);}
+    public int bookRoom(Guest g,int roomNo,LocalDate in,LocalDate out)throws SQLException{validateDates(in,out);Room room=roomDAO.findByRoomNumber(roomNo);if(room==null)throw new IllegalArgumentException("Room does not exist!");if(!room.getStatus().equalsIgnoreCase("AVAILABLE"))throw new IllegalArgumentException("Room is not available!");try(Connection c=DBConnection.getConnection()){try{c.setAutoCommit(false);try(PreparedStatement p=c.prepareStatement("SELECT room_id FROM rooms WHERE room_id=? FOR UPDATE")){p.setInt(1,room.getRoomId());try(ResultSet r=p.executeQuery()){if(!r.next())throw new SQLException("Room not found!");}}if(!reservationDAO.isRoomAvailable(room.getRoomId(),in,out,c))throw new IllegalArgumentException("Room already booked for these dates!");int guestId=insertGuest(g,c);Reservation res=new Reservation(guestId,room.getRoomId(),in,out);int id=reservationDAO.createReservation(res,c);c.commit();return id;}catch(Exception e){c.rollback();throw e;}finally{c.setAutoCommit(true);}}}
+    private int insertGuest(Guest g,Connection c)throws SQLException{String s="INSERT INTO guests(guest_name,contact_no,email) VALUES(?,?,?)";try(PreparedStatement p=c.prepareStatement(s,Statement.RETURN_GENERATED_KEYS)){p.setString(1,g.getGuestName());p.setString(2,g.getContactNo());p.setString(3,g.getEmail());p.executeUpdate();try(ResultSet r=p.getGeneratedKeys()){return r.next()?r.getInt(1):-1;}}}
+    public Reservation findReservation(int id)throws SQLException{return reservationDAO.findById(id);} public void viewAllReservations()throws SQLException{reservationDAO.viewAllReservations();} public boolean checkIn(int id)throws SQLException{return reservationDAO.checkIn(id);} public boolean cancelReservation(int id)throws SQLException{return reservationDAO.cancelReservation(id);} public boolean updateReservation(int id,LocalDate in,LocalDate out)throws SQLException{validateDates(in,out);return reservationDAO.updateReservation(id,in,out);} public void revenueReport()throws SQLException{reservationDAO.revenueReport();}
+    public double checkOutAndGenerateBill(int id)throws SQLException{Reservation r=reservationDAO.findById(id);if(r==null)throw new IllegalArgumentException("Reservation not found!");if(!"CHECKED_IN".equals(r.getStatus()))throw new IllegalArgumentException("Guest must be checked in first!");Room room=null;for(Room x:roomDAO.getAllRooms())if(x.getRoomId()==r.getRoomId())room=x;if(room==null)throw new SQLException("Room not found!");long nights=java.time.temporal.ChronoUnit.DAYS.between(r.getCheckIn(),r.getCheckOut());double charge=nights*room.getPricePerNight(),total=charge+charge*.12;try(Connection c=DBConnection.getConnection()){try{c.setAutoCommit(false);if(!reservationDAO.checkOut(id))throw new SQLException("Check-out failed!");if(!reservationDAO.savePayment(id,total,c))throw new SQLException("Payment failed!");c.commit();}catch(Exception e){c.rollback();throw e;}finally{c.setAutoCommit(true);}}System.out.printf("Room Charge: ₹%.2f%nTax: ₹%.2f%nTotal: ₹%.2f%n",charge,charge*.12,total);return total;}
+    private void validateDates(LocalDate in,LocalDate out){if(in==null||out==null||!out.isAfter(in))throw new IllegalArgumentException("Check-out must be after check-in!");}
+}
